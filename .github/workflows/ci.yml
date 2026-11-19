@@ -65,13 +65,3 @@ jobs:
           kind version
           kubectl version --client
       - run: e2e/objectstore.sh
-      - name: Diagnostics
-        if: failure()
-        run: |
-          kubectl get pods -A || true
-          kubectl -n app get clusters,backups,pvc,pods -o wide || true
-          kubectl -n app get clusters -o yaml || true
-          kubectl -n cnpg-system logs deployment/barman-cloud --tail=200 || true
-          kubectl -n app logs -l cnpg.io/cluster=pg --all-containers --tail=100 || true
-          kubectl -n cnpg-system logs deployment/cnpg-controller-manager --tail=200 || true
-          kubectl -n app describe backups || true
