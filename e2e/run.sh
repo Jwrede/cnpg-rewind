@@ -183,6 +183,7 @@ k -n "$NS" wait --for=jsonpath='{.status.phase}'=completed backup/after --timeou
 
 log "undo: rewind to the safety backup $SAFETY (no rehearsal, no second safety backup)"
 OUT=$($R run -n "$NS" --backup "$SAFETY" --rehearse=false --safety-backup=false --yes pg)
+echo "$OUT" | grep -q "safety backup:  skipped" || fail "undo: safety backup not shown as skipped"
 echo "$OUT"
 [[ "$(psql pg 'select count(*) from t')" == 3 ]] || fail "undo did not bring back 3 rows"
 k -n "$NS" get clusters,backups,volumesnapshots

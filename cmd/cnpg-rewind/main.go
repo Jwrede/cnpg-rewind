@@ -122,7 +122,8 @@ func run(cmd string, args []string) error {
 	if err != nil {
 		return err
 	}
-	p.Print(os.Stdout)
+	ro := rewind.RunOptions{Rehearse: c.rehearse, SafetyBackup: c.safety, CheckSQL: c.checkSQL, Timeout: c.timeout}
+	p.Print(os.Stdout, ro)
 	manifest, err := p.Manifest()
 	if err != nil {
 		return err
@@ -145,7 +146,5 @@ func run(cmd string, args []string) error {
 		}
 	}
 	fmt.Println()
-	return cl.Run(ctx, p, rewind.RunOptions{
-		Rehearse: c.rehearse, SafetyBackup: c.safety, CheckSQL: c.checkSQL, Timeout: c.timeout,
-	})
+	return cl.Run(ctx, p, ro)
 }

@@ -74,8 +74,8 @@ func (c *Client) Load(ctx context.Context, ns, name string, opts Options) (*Plan
 	return Build(cluster, bl.Items, secretOwned, owned, opts)
 }
 
-// Print writes a human-readable summary of the plan.
-func (p *Plan) Print(w io.Writer) {
+// Print writes a human-readable summary of the plan for the given run options.
+func (p *Plan) Print(w io.Writer, ro RunOptions) {
 	fmt.Fprintf(w, "Cluster %s/%s\n", p.Namespace, p.Name)
 	fmt.Fprintf(w, "  restore from:   backup %s (method %s, ended %s)\n", p.BackupName, p.BackupMethod, p.BackupStop)
 	if p.TargetTime != "" {
@@ -85,12 +85,19 @@ func (p *Plan) Print(w io.Writer) {
 	if p.Archive != "" {
 		fmt.Fprintf(w, "  WAL archive:    %s, serverName %q -> %q\n", p.Archive, p.OldServerName, p.NewServerName)
 	}
-	if p.SafetyBackup != nil {
+	switch {
+	case !ro.SafetyBackup:
+		fmt.Fprintf(w, "  safety backup:  skipped\n")
+	case p.SafetyBackup != nil:
 		fmt.Fprintf(w, "  safety backup:  %s (method %v)\n", p.SafetyBackup.GetName(), p.SafetyBackup.Object["spec"].(map[string]any)["method"])
-	} else {
+	default:
 		fmt.Fprintf(w, "  safety backup:  none possible (no backup method configured)\n")
 	}
-	fmt.Fprintf(w, "  rehearsal:      cluster %s, deleted afterwards\n", RehearsalName(p.Name))
+	if ro.Rehearse {
+		fmt.Fprintf(w, "  rehearsal:      cluster %s, deleted afterwards\n", RehearsalName(p.Name))
+	} else {
+		fmt.Fprintf(w, "  rehearsal:      skipped\n")
+	}
 	for _, d := range p.Detach {
 		fmt.Fprintf(w, "  detach:         %s %s (owned by the cluster, would be deleted with it)\n", d.Kind, d.Name)
 	}

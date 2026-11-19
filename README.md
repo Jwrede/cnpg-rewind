@@ -21,8 +21,9 @@ in order and stops before anything destructive if the restore would not work.
 - The workaround posted in that thread (change `destinationPath`, recreate the cluster) is the
   manual procedure this tool automates. Other operators (Crunchy PGO, Percona) have an in-place
   restore; CloudNativePG does not.
-- Related: [#5778](https://github.com/cloudnative-pg/cloudnative-pg/issues/5778) (recover a
-  cluster declaratively from its backups).
+- Related: [#5778](https://github.com/cloudnative-pg/cloudnative-pg/issues/5778) "managing cnpg
+  in GitOps workflows" (69 reactions), where recovering an existing cluster is one of the
+  steps that needs manual manifest edits.
 
 ## What a run does
 
@@ -66,11 +67,55 @@ create, patch and delete `clusters` and `backups` (postgresql.cnpg.io), get, lis
 ## Example
 
 This is the output of the end-to-end test (`e2e/run.sh`): cluster `pg` with two instances,
-rows 1, 2, 3 written between backups, rewound to the backup taken after row 1.
+row 1 written, backup `nightly-...` taken by a `ScheduledBackup`, rows 2 and 3 written later.
+The cluster is rewound to the `nightly` backup; the check query counts the rows in table `t`.
 
 ```
-(filled in from the CI run)
+$ cnpg-rewind run -n app --backup nightly-20261119052715 --check-sql "select count(*) from t" --yes -o /tmp/pg-rewound.yaml pg
+Cluster app/pg
+  restore from:   backup nightly-20261119052715 (method volumeSnapshot, ended 2026-11-19T05:27:23Z)
+  keeps:          name, services, secret pg-app (database app, owner app)
+  safety backup:  pg-before-rewind-20261119052728 (method volumeSnapshot)
+  rehearsal:      cluster pg-rewind-check, deleted afterwards
+  detach:         Secret pg-app (owned by the cluster, would be deleted with it)
+  detach:         VolumeSnapshot manual (owned by the cluster, would be deleted with it)
+  detach:         VolumeSnapshot manual-wal (owned by the cluster, would be deleted with it)
+  detach:         Backup nightly-20261119052715 (owned by the cluster, would be deleted with it)
+  detach:         VolumeSnapshot nightly-20261119052715 (owned by the cluster, would be deleted with it)
+  detach:         VolumeSnapshot nightly-20261119052715-wal (owned by the cluster, would be deleted with it)
+  note:           the Cluster object is deleted and recreated: pods, PVCs, services and operator-generated certificates are recreated, the application secret pg-app is kept
+  note:           GitOps tools (Argo CD, Flux) may recreate the old Cluster while it is gone; suspend their sync for this Cluster first and commit the printed manifest afterwards
+==> rehearsal: restoring pg-rewind-check from backup nightly-20261119052715
+    cluster pg-rewind-check: Setting up primary
+    cluster pg-rewind-check: Waiting for the instances to become active
+check query on pg-rewind-check: 1
+==> delete rehearsal cluster pg-rewind-check
+    deletion of pg-rewind-check: 1 pods, 2 PVCs left
+==> safety backup pg-before-rewind-20261119052728 of the current state
+==> detach Secret pg-app from the cluster
+==> detach VolumeSnapshot manual from the cluster
+==> detach VolumeSnapshot manual-wal from the cluster
+==> detach Backup nightly-20261119052715 from the cluster
+==> detach VolumeSnapshot nightly-20261119052715 from the cluster
+==> detach VolumeSnapshot nightly-20261119052715-wal from the cluster
+==> detach VolumeSnapshot pg-before-rewind-20261119052728 from the cluster
+==> detach VolumeSnapshot pg-before-rewind-20261119052728-wal from the cluster
+==> delete cluster pg
+    deletion of pg: 2 pods, 4 PVCs left
+    deletion of pg: 1 pods, 2 PVCs left
+==> create cluster pg from backup nightly-20261119052715
+    cluster pg: Setting up primary
+    cluster pg: Waiting for the instances to become active
+    cluster pg: Creating a new replica
+    cluster pg: Waiting for the instances to become active
+check query on pg: 1
+==> done: pg is ready, restored from backup nightly-20261119052715
 ```
+
+Afterwards the test checks: one row in `t`, both instances ready, label `team: data` kept,
+`pg-app` with the same UID and password, `psql -h pg-rw -U app` works with that password, all
+four backups and their snapshots still there. The whole run (rehearsal, safety backup,
+deletion, recovery of two instances) took about two minutes on a GitHub runner.
 
 ## Flags
 
