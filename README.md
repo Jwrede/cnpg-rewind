@@ -117,6 +117,23 @@ Afterwards the test checks: one row in `t`, both instances ready, label `team: d
 four backups and their snapshots still there. The whole run (rehearsal, safety backup,
 deletion, recovery of two instances) took about two minutes on a GitHub runner.
 
+Point-in-time rewind with the Barman Cloud plugin (from `e2e/objectstore.sh`; rows 1 and 2 were
+written before the target time, row 3 after it):
+
+```
+$ cnpg-rewind run -n app --to 2026-11-19T05:58:41Z --check-sql "select count(*) from t" --yes pg
+Cluster app/pg
+  restore from:   backup base (method plugin, ended 2026-11-19T05:58:36Z)
+  replay WAL to:  2026-11-19T05:58:41Z (from serverName "pg")
+  WAL archive:    plugin, serverName "pg" -> "pg-rewind1"
+  safety backup:  pg-before-rewind-20261119055846 (method plugin)
+  ...
+check query on pg-rewind-check: 2
+...
+check query on pg: 2
+==> done: pg is ready, restored from backup base
+```
+
 ## Flags
 
 ```
@@ -134,8 +151,8 @@ deletion, recovery of two instances) took about two minutes on a GitHub runner.
 ## Tests
 
 - `go test ./...`: plan construction for volume snapshot, Barman Cloud plugin and in-tree
-  `barmanObjectStore` clusters (backup choice, recovery source, `serverName` bump, owner
-  references, rehearsal and safety backup manifests).
+  `barmanObjectStore` clusters (backup choice, recovery source and its `serverName`, the new
+  `serverName`, owner references, rehearsal and safety backup manifests).
 - `e2e/run.sh` (CI, kind + CSI hostpath driver with snapshots + CloudNativePG 1.30.1): two-instance
   cluster with volume snapshot backups owned by the cluster (one from a `ScheduledBackup` with
   `backupOwnerReference: cluster`). Checks that `plan` changes nothing; that `run` rewinds to the
@@ -143,13 +160,27 @@ deletion, recovery of two instances) took about two minutes on a GitHub runner.
   both instances, the old labels, the same application secret (same UID and password) and a
   working login through `pg-rw`; that all backups and snapshots survive; that a new backup of
   the rewound cluster succeeds; and that rewinding to the safety backup brings the later rows
-  back. Runs weekly against the current runner image.
+  back.
+- `e2e/objectstore.sh` (CI, kind + cert-manager 1.21.3 + CloudNativePG 1.30.1 + Barman Cloud
+  plugin 0.16.0 + RustFS as S3 server): base backup after row 1, row 2, target time, row 3.
+  `run --to <target>` restores the base backup and replays WAL to the target (rehearsal and the
+  rewound cluster both report 2 rows), the plugin's `serverName` becomes `pg-rewind1`, WAL
+  archiving and a new backup work afterwards. Rewinding to the safety backup (taken under
+  serverName `pg`) brings back all 3 rows and moves archiving to `pg-rewind2`.
+
+Both e2e jobs also run weekly against the current runner image and the pinned versions.
 
 ## Limitations
 
-- End-to-end tested with volume snapshot backups only. The object store paths (Barman Cloud
-  plugin, in-tree `barmanObjectStore`) and `--to` are covered by unit tests of the generated
-  manifests, not by a run against a real object store.
+- Tested end to end with volume snapshot backups and with the Barman Cloud plugin on an S3
+  server. The in-tree `spec.backup.barmanObjectStore` path (deprecated in CloudNativePG) is
+  covered by unit tests of the generated manifest only.
+- Plugin backups do not record their `serverName` in the Backup status. cnpg-rewind writes it
+  as an annotation on its safety backups; for other backups it assumes the cluster's current
+  `serverName`. Backups taken before an earlier rewind (outside cnpg-rewind) need that
+  annotation (`cnpg-rewind.jwrede.github.io/server-name`) to be restored.
+- A point-in-time target can only be reached within the WAL of the chosen backup's
+  `serverName`, so not across an earlier rewind.
 - Downtime: the cluster is gone between deletion and the end of the recovery. This is an
   in-place restore, not a switchover.
 - Operator-generated certificates (`<name>-ca`, `<name>-server`, `<name>-replication`) are
