@@ -79,7 +79,7 @@ func (p *Plan) Print(w io.Writer, ro RunOptions) {
 	fmt.Fprintf(w, "Cluster %s/%s\n", p.Namespace, p.Name)
 	fmt.Fprintf(w, "  restore from:   backup %s (method %s, ended %s)\n", p.BackupName, p.BackupMethod, p.BackupStop)
 	if p.TargetTime != "" {
-		fmt.Fprintf(w, "  replay WAL to:  %s (from serverName %q)\n", p.TargetTime, p.OldServerName)
+		fmt.Fprintf(w, "  replay WAL to:  %s (from serverName %q)\n", p.TargetTime, p.SourceServerName)
 	}
 	fmt.Fprintf(w, "  keeps:          name, services, secret %s (database %s, owner %s)\n", p.AppSecret, p.Database, p.Owner)
 	if p.Archive != "" {

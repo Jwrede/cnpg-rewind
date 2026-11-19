@@ -28,6 +28,9 @@ const (
 	AnnoTarget = annoPrefix + "target-time"
 	// AnnoAt records when the rewind started.
 	AnnoAt = annoPrefix + "rewound-at"
+	// AnnoServerName records, on a safety backup, the serverName of the
+	// WAL archive the backup belongs to.
+	AnnoServerName = annoPrefix + "server-name"
 )
 
 // Options select what the cluster is rewound to.
@@ -62,6 +65,10 @@ type Plan struct {
 	Archive       string
 	OldServerName string
 	NewServerName string
+	// SourceServerName is the serverName the chosen backup was taken under;
+	// it differs from OldServerName when the backup predates an earlier
+	// rewind.
+	SourceServerName string
 
 	Database, Owner, AppSecret string
 
@@ -113,6 +120,15 @@ func Build(cluster *unstructured.Unstructured, backups []unstructured.Unstructur
 		p.BackupMethod, _, _ = unstructured.NestedString(b.Object, "spec", "method")
 	}
 	p.BackupStop, _, _ = unstructured.NestedString(b.Object, "status", "stoppedAt")
+	if p.Archive != "" {
+		p.SourceServerName, _, _ = unstructured.NestedString(b.Object, "status", "serverName")
+		if p.SourceServerName == "" {
+			p.SourceServerName = b.GetAnnotations()[AnnoServerName]
+		}
+		if p.SourceServerName == "" {
+			p.SourceServerName = p.OldServerName
+		}
+	}
 	if p.BackupMethod != "volumeSnapshot" && p.Archive == "" {
 		return nil, fmt.Errorf("backup %s uses method %q, but the cluster has no object store configured to restore it from", p.BackupName, p.BackupMethod)
 	}
@@ -148,7 +164,10 @@ func Build(cluster *unstructured.Unstructured, backups []unstructured.Unstructur
 	}
 
 	if p.Archive != "" {
-		p.Notes = append(p.Notes, fmt.Sprintf("WAL archive and new base backups go to serverName %q; the old archive %q stays untouched and remains the source of this rewind", p.NewServerName, p.OldServerName))
+		p.Notes = append(p.Notes, fmt.Sprintf("WAL archive and new base backups go to serverName %q; the archive %q stays untouched and is the source of this rewind", p.NewServerName, p.SourceServerName))
+		if p.SourceServerName != p.OldServerName && p.TargetTime != "" {
+			p.Notes = append(p.Notes, fmt.Sprintf("backup %s belongs to serverName %q from before an earlier rewind; WAL replay can only reach times before that rewind", p.BackupName, p.SourceServerName))
+		}
 	}
 	p.Notes = append(p.Notes,
 		"the Cluster object is deleted and recreated: pods, PVCs, services and operator-generated certificates are recreated, the application secret "+p.AppSecret+" is kept",
@@ -380,7 +399,7 @@ func (p *Plan) originCluster(spec map[string]any) map[string]any {
 	case "barmanObjectStore":
 		bos, _, _ := unstructured.NestedMap(spec, "backup", "barmanObjectStore")
 		bos = deepCopyMap(bos)
-		bos["serverName"] = p.OldServerName
+		bos["serverName"] = p.SourceServerName
 		// Archive-side settings do not apply to a recovery source.
 		delete(bos, "data")
 		delete(bos, "wal")
@@ -394,7 +413,7 @@ func (p *Plan) originCluster(spec map[string]any) map[string]any {
 			"name": BarmanPlugin,
 			"parameters": map[string]any{
 				"barmanObjectName": params["barmanObjectName"],
-				"serverName":       p.OldServerName,
+				"serverName":       p.SourceServerName,
 			},
 		}}
 	}
@@ -496,15 +515,19 @@ func (p *Plan) safetyBackup(spec map[string]any, now time.Time) *unstructured.Un
 	default:
 		return nil
 	}
+	meta := map[string]any{
+		"name":      fmt.Sprintf("%s-before-rewind-%s", p.Name, now.UTC().Format("20060102150405")),
+		"namespace": p.Namespace,
+		"labels":    map[string]any{"app.kubernetes.io/managed-by": "cnpg-rewind"},
+	}
+	if p.Archive != "" {
+		meta["annotations"] = map[string]any{AnnoServerName: p.OldServerName}
+	}
 	return &unstructured.Unstructured{Object: map[string]any{
 		"apiVersion": "postgresql.cnpg.io/v1",
 		"kind":       "Backup",
-		"metadata": map[string]any{
-			"name":      fmt.Sprintf("%s-before-rewind-%s", p.Name, now.UTC().Format("20060102150405")),
-			"namespace": p.Namespace,
-			"labels":    map[string]any{"app.kubernetes.io/managed-by": "cnpg-rewind"},
-		},
-		"spec": bs,
+		"metadata":   meta,
+		"spec":       bs,
 	}}
 }
 

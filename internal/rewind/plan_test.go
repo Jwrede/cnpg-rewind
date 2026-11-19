@@ -314,6 +314,35 @@ spec:
 	}
 }
 
+func TestSourceServerNameAfterEarlierRewind(t *testing.T) {
+	c := obj(t, pluginCluster)
+	plugins, _, _ := unstructured.NestedSlice(c.Object, "spec", "plugins")
+	_ = unstructured.SetNestedField(plugins[0].(map[string]any), "pg-rewind1", "parameters", "serverName")
+	_ = unstructured.SetNestedSlice(c.Object, plugins, "spec", "plugins")
+	safety := objectBackup("pg-before-rewind-1", "2026-11-18T01:00:00Z", "ID0")
+	safety.SetAnnotations(map[string]string{AnnoServerName: "pg"})
+	fromStatus := objectBackup("b-status", "2026-11-18T02:00:00Z", "ID2")
+	_ = unstructured.SetNestedField(fromStatus.Object, "pg-old", "status", "serverName")
+	recent := objectBackup("b-recent", "2026-11-19T02:00:00Z", "ID3")
+	backups := []unstructured.Unstructured{safety, fromStatus, recent}
+	for backup, want := range map[string]string{"pg-before-rewind-1": "pg", "b-status": "pg-old", "b-recent": "pg-rewind1"} {
+		p, err := Build(c, backups, false, nil, Options{Backup: backup, Now: now})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if p.SourceServerName != want || p.NewServerName != "pg-rewind2" {
+			t.Errorf("%s: source %q new %q", backup, p.SourceServerName, p.NewServerName)
+		}
+		ext, _, _ := unstructured.NestedSlice(p.NewCluster.Object, "spec", "externalClusters")
+		if sn, _, _ := unstructured.NestedString(ext[len(ext)-1].(map[string]any), "plugin", "parameters", "serverName"); sn != want {
+			t.Errorf("%s: origin serverName %q", backup, sn)
+		}
+		if a := p.SafetyBackup.GetAnnotations()[AnnoServerName]; a != "pg-rewind1" {
+			t.Errorf("safety backup annotation %q", a)
+		}
+	}
+}
+
 func TestNextServerName(t *testing.T) {
 	for in, want := range map[string]string{"pg": "pg-rewind1", "pg-rewind1": "pg-rewind2", "pg-rewind9": "pg-rewind10", "a-rewind": "a-rewind-rewind1"} {
 		if got := NextServerName(in); got != want {
